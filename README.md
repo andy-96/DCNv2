@@ -7,8 +7,9 @@ Since DCN is used in many models and performance well but in industry this op su
 ![image-20210217183103121](https://gitee.com/jinfagang/picbed/raw/master/img/image-20210217183103121.png)
 
 Pytorch 1.7 inferenced in CenterNet-DLA model. It works on Pytorch 1.7 so that you can use it in your RTX 30 series cards.
-
-
+<s>I have ran the gradient check for many times with DOUBLE type. Every tensor **except offset** passes.
+However, when I set the offset to 0.5, it passes. I'm still wondering what cause this problem. Is it because some
+non-differential points? </s>
 
 ## Updates
 
@@ -20,5 +21,4 @@ Pytorch 1.7 inferenced in CenterNet-DLA model. It works on Pytorch 1.7 so that y
 
 
 ## Contact
-
-If you have any question, please using this platform post questions: http://t.manaai.cn
+Please post an issue or PR if you have any comments.
