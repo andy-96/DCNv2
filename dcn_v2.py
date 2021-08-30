@@ -1,22 +1,45 @@
 #!/usr/bin/env python
-from __future__ import absolute_import, division, print_function
+from __future__ import absolute_import
+from __future__ import print_function
+from __future__ import division
 
 import math
-
 import torch
 from torch import nn
 from torch.autograd import Function
-from torch.autograd.function import once_differentiable
 from torch.nn.modules.utils import _pair
+from torch.autograd.function import once_differentiable
 
 import _ext as _backend
+
+use_amp = False
+
+def set_amp(amp):
+    global use_amp
+    use_amp = amp
 
 
 class _DCNv2(Function):
     @staticmethod
     def forward(
-        ctx, input, offset, mask, weight, bias, stride, padding, dilation, deformable_groups
+        ctx,
+        input,
+        offset,
+        mask,
+        weight,
+        bias,
+        stride,
+        padding,
+        dilation,
+        deformable_groups,
     ):
+        if use_amp:
+            input = input.float()
+            offset = offset.float()
+            mask = mask.float()
+            weight = weight.float()
+            bias = bias.float()
+
         ctx.stride = _pair(stride)
         ctx.padding = _pair(padding)
         ctx.dilation = _pair(dilation)
@@ -39,13 +62,25 @@ class _DCNv2(Function):
             ctx.deformable_groups,
         )
         ctx.save_for_backward(input, offset, mask, weight, bias)
+
+        if use_amp:
+            return output.half()
         return output
 
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
+        if use_amp:
+            grad_output = grad_output.float()
+
         input, offset, mask, weight, bias = ctx.saved_tensors
-        grad_input, grad_offset, grad_mask, grad_weight, grad_bias = _backend.dcn_v2_backward(
+        (
+            grad_input,
+            grad_offset,
+            grad_mask,
+            grad_weight,
+            grad_bias,
+        ) = _backend.dcn_v2_backward(
             input,
             weight,
             bias,
@@ -63,30 +98,23 @@ class _DCNv2(Function):
             ctx.deformable_groups,
         )
 
-        return grad_input, grad_offset, grad_mask, grad_weight, grad_bias, None, None, None, None
+        if use_amp:
+            grad_input = grad_input.half()
+            grad_offset = grad_offset.half()
+            grad_mask = grad_mask.half()
+            grad_weight = grad_weight.half()
+            grad_bias = grad_bias.half()
 
-    @staticmethod
-    def symbolic(
-        g, input, offset, mask, weight, bias, stride, padding, dilation, deformable_groups
-    ):
-        from torch.nn.modules.utils import _pair
-
-        stride = _pair(stride)
-        padding = _pair(padding)
-        dilation = _pair(dilation)
-        # as of trt 7, the dcn operation will be translated again by modifying the onnx file
-        # so the exporting code is kept to resemble the forward()
-        return g.op(
-            "DCNv2_2",
-            input,
-            offset,
-            mask,
-            weight,
-            bias,
-            stride_i=stride,
-            padding_i=padding,
-            dilation_i=dilation,
-            deformable_groups_i=deformable_groups,
+        return (
+            grad_input,
+            grad_offset,
+            grad_mask,
+            grad_weight,
+            grad_bias,
+            None,
+            None,
+            None,
+            None,
         )
 
 
@@ -113,7 +141,9 @@ class DCNv2(nn.Module):
         self.dilation = _pair(dilation)
         self.deformable_groups = deformable_groups
 
-        self.weight = nn.Parameter(torch.Tensor(out_channels, in_channels, *self.kernel_size))
+        self.weight = nn.Parameter(
+            torch.Tensor(out_channels, in_channels, *self.kernel_size)
+        )
         self.bias = nn.Parameter(torch.Tensor(out_channels))
         self.reset_parameters()
 
@@ -130,7 +160,10 @@ class DCNv2(nn.Module):
             2 * self.deformable_groups * self.kernel_size[0] * self.kernel_size[1]
             == offset.shape[1]
         )
-        assert self.deformable_groups * self.kernel_size[0] * self.kernel_size[1] == mask.shape[1]
+        assert (
+            self.deformable_groups * self.kernel_size[0] * self.kernel_size[1]
+            == mask.shape[1]
+        )
         return dcn_v2_conv(
             input,
             offset,
@@ -156,10 +189,18 @@ class DCN(DCNv2):
         deformable_groups=1,
     ):
         super(DCN, self).__init__(
-            in_channels, out_channels, kernel_size, stride, padding, dilation, deformable_groups
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            deformable_groups,
         )
 
-        channels_ = self.deformable_groups * 3 * self.kernel_size[0] * self.kernel_size[1]
+        channels_ = (
+            self.deformable_groups * 3 * self.kernel_size[0] * self.kernel_size[1]
+        )
         self.conv_offset_mask = nn.Conv2d(
             self.in_channels,
             channels_,
@@ -208,6 +249,11 @@ class _DCNv2Pooling(Function):
         sample_per_part=4,
         trans_std=0.0,
     ):
+        if use_amp:
+            input = input.float()
+            roi = roi.float()
+            offset = offset.float()
+
         ctx.spatial_scale = spatial_scale
         ctx.no_trans = int(no_trans)
         ctx.output_dim = output_dim
@@ -231,11 +277,17 @@ class _DCNv2Pooling(Function):
             ctx.trans_std,
         )
         ctx.save_for_backward(input, rois, offset, output_count)
+
+        if use_amp:
+            return output.half()
         return output
 
     @staticmethod
     @once_differentiable
     def backward(ctx, grad_output):
+        if use_amp:
+            grad_output = grad_output.float()
+
         input, rois, offset, output_count = ctx.saved_tensors
         grad_input, grad_offset = _backend.dcn_v2_psroi_pooling_backward(
             grad_output,
@@ -253,7 +305,22 @@ class _DCNv2Pooling(Function):
             ctx.trans_std,
         )
 
-        return grad_input, None, grad_offset, None, None, None, None, None, None, None, None
+        if use_amp:
+            grad_input = grad_input.half()
+            grad_offset = grad_offset.half()
+        return (
+            grad_input,
+            None,
+            grad_offset,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
 
 
 dcn_v2_pooling = _DCNv2Pooling.apply
@@ -329,7 +396,8 @@ class DCNPooling(DCNv2Pooling):
         if not no_trans:
             self.offset_mask_fc = nn.Sequential(
                 nn.Linear(
-                    self.pooled_size * self.pooled_size * self.output_dim, self.deform_fc_dim
+                    self.pooled_size * self.pooled_size * self.output_dim,
+                    self.deform_fc_dim,
                 ),
                 nn.ReLU(inplace=True),
                 nn.Linear(self.deform_fc_dim, self.deform_fc_dim),
