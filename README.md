@@ -1,3 +1,5 @@
+" Added Pytorch AMP support!
+
 ## Deformable Convolutional Networks V2 with Pytorch 1.X
 
 ### Build
